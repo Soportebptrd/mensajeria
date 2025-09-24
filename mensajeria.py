@@ -16,7 +16,7 @@ from branca.element import Element
 # URL pública del Google Sheet (publicada como CSV)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik/export?format=csv"
 
-# Coordenadas del cuadrante (polígono)
+# NUEVO cuadrante (Gran Santo Domingo)
 CUADRANTE_COORDS = [
     [18.470910, -69.881842],
     [18.467871, -69.889721],
@@ -24,7 +24,7 @@ CUADRANTE_COORDS = [
     [18.461370, -69.899534],
     [18.460956, -69.902208],
     [18.456405, -69.913385],
-	[18.446481, -69.924817],
+    [18.446481, -69.924817],
     [18.435420, -69.943950],
     [18.426873, -69.971667],
     [18.426485, -69.981364],
@@ -36,9 +36,9 @@ CUADRANTE_COORDS = [
     [18.484094, -69.967227],
     [18.486417, -69.969167],
     [18.489507, -69.969121],
-	[18.494270, -69.964476],
- 	[18.507445, -69.960890],  
- 	[18.520477, -69.936902],	 
+    [18.494270, -69.964476],
+    [18.507445, -69.960890],
+    [18.520477, -69.936902],
     [18.509636, -69.915537],
     [18.513721, -69.896844],
     [18.507693, -69.878878],
@@ -58,6 +58,34 @@ COLUMNAS_TABLA = [
     'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)',
     'Pago',
 ]
+
+# ==============================
+# AUTENTICACIÓN SIMPLE
+# ==============================
+def check_password() -> bool:
+    """Login básico en sidebar: idemefa / idemefa"""
+    def _password_entered():
+        user_ok = st.session_state.get("username", "") == "idemefa"
+        pass_ok = st.session_state.get("password", "") == "idemefa"
+        st.session_state["password_correct"] = bool(user_ok and pass_ok)
+        # por seguridad, no guardamos credenciales en estado si es correcto
+        if st.session_state["password_correct"]:
+            del st.session_state["username"]
+            del st.session_state["password"]
+
+    if "password_correct" not in st.session_state:
+        st.sidebar.text_input("Usuario", key="username")
+        st.sidebar.text_input("Contraseña", type="password", key="password")
+        st.sidebar.button("Ingresar", on_click=_password_entered, type="primary")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.sidebar.text_input("Usuario", key="username")
+        st.sidebar.text_input("Contraseña", type="password", key="password")
+        st.sidebar.button("Ingresar", on_click=_password_entered, type="primary")
+        st.sidebar.error("😕 Usuario o contraseña incorrectos")
+        return False
+    else:
+        return True
 
 # ==============================
 # UTILIDADES
@@ -89,20 +117,30 @@ def cargar_datos(url: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _bounds_from_coords(coords: list[list[float]]):
+    """Devuelve (sw, ne) bounds a partir de una lista de [lat, lon]."""
+    if not coords:
+        return None
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
+    sw = [min(lats), min(lons)]
+    ne = [max(lats), max(lons)]
+    return [sw, ne]
+
+
 def crear_mapa(df: pd.DataFrame):
-    """Construye un mapa Folium con polígono/leyenda y marcadores coloreados por Pago (25/75)."""
+    """Construye un mapa Folium centrado en el GSD: ajusta vista a marcadores + polígono para evitar vista fuera de zona (p.ej., Isla Saona)."""
     cols_coord_ok = {'Latitud', 'Longitud'}.issubset(set(df.columns))
-    if df.empty or not cols_coord_ok:
-        return None
 
-    df = df.dropna(subset=['Latitud', 'Longitud'])
-    if df.empty:
-        return None
+    # Coordenadas de marcadores válidos (si hay)
+    coords_markers = []
+    if not df.empty and cols_coord_ok:
+        dfc = df.dropna(subset=['Latitud', 'Longitud'])
+        coords_markers = dfc[['Latitud', 'Longitud']].values.tolist()
 
-    lat_center = df['Latitud'].mean()
-    lon_center = df['Longitud'].mean()
-
-    m = folium.Map(location=[lat_center, lon_center], zoom_start=12, control_scale=True)
+    # Centro por defecto: Gran Santo Domingo
+    center_default = [18.4861, -69.9312]
+    m = folium.Map(location=center_default, zoom_start=12, control_scale=True)
 
     # Polígono del cuadrante (zona $25)
     folium.Polygon(
@@ -117,35 +155,36 @@ def crear_mapa(df: pd.DataFrame):
     ).add_to(m)
 
     # Marcadores
-    for _, row in df.iterrows():
-        pago = row.get('Pago', None)
-        if pd.notna(pago) and float(pago) == 25:
-            color = 'green'; icono = 'ok-sign'; tip = 'Dentro cuadrante ($25)'
-        elif pd.notna(pago) and float(pago) == 75:
-            color = 'red'; icono = 'remove-sign'; tip = 'Fuera cuadrante ($75)'
-        else:
-            color = 'gray'; icono = 'question-sign'; tip = 'Sin clasificación'
+    if coords_markers:
+        for _, row in dfc.iterrows():
+            pago = row.get('Pago', None)
+            if pd.notna(pago) and float(pago) == 25:
+                color = 'green'; icono = 'ok-sign'; tip = 'Dentro cuadrante ($25)'
+            elif pd.notna(pago) and float(pago) == 75:
+                color = 'red'; icono = 'remove-sign'; tip = 'Fuera cuadrante ($75)'
+            else:
+                color = 'gray'; icono = 'question-sign'; tip = 'Sin clasificación'
 
-        fecha_val = row.get('Fecha de llenar', pd.NaT)
-        fecha_str = fecha_val.strftime('%d/%m/%Y %H:%M') if pd.notna(fecha_val) else 'N/A'
+            fecha_val = row.get('Fecha de llenar', pd.NaT)
+            fecha_str = fecha_val.strftime('%d/%m/%Y %H:%M') if pd.notna(fecha_val) else 'N/A'
 
-        popup_html = f"""
-        <div style='width:260px;'>
-            <h4 style='margin:0 0 6px 0;'>Detalle de Entrega</h4>
-            <p style='margin:0;'><b>Colaborador:</b> {row.get('Empleado', 'N/A')}</p>
-            <p style='margin:0;'><b>Cliente:</b> {row.get('Nombre del cliente (usuario/codigo)', 'N/A')}</p>
-            <p style='margin:0;'><b>Pago:</b> ${row.get('Pago', 'N/A')}</p>
-            <p style='margin:0;'><b>Fecha:</b> {fecha_str}</p>
-            <p style='margin:0;'><b>Dirección:</b> {str(row.get('Dirección de envío', 'N/A'))[:60]}...</p>
-        </div>
-        """
+            popup_html = f"""
+            <div style='width:260px;'>
+                <h4 style='margin:0 0 6px 0;'>Detalle de Entrega</h4>
+                <p style='margin:0;'><b>Colaborador:</b> {row.get('Empleado', 'N/A')}</p>
+                <p style='margin:0;'><b>Cliente:</b> {row.get('Nombre del cliente (usuario/codigo)', 'N/A')}</p>
+                <p style='margin:0;'><b>Pago:</b> ${row.get('Pago', 'N/A')}</p>
+                <p style='margin:0;'><b>Fecha:</b> {fecha_str}</p>
+                <p style='margin:0;'><b>Dirección:</b> {str(row.get('Dirección de envío', 'N/A'))[:60]}...</p>
+            </div>
+            """
 
-        folium.Marker(
-            location=[row['Latitud'], row['Longitud']],
-            popup=folium.Popup(popup_html, max_width=320),
-            tooltip=tip,
-            icon=folium.Icon(color=color, icon=icono, prefix='glyphicon'),
-        ).add_to(m)
+            folium.Marker(
+                location=[row['Latitud'], row['Longitud']],
+                popup=folium.Popup(popup_html, max_width=320),
+                tooltip=tip,
+                icon=folium.Icon(color=color, icon=icono, prefix='glyphicon'),
+            ).add_to(m)
 
     # Leyenda simple (HTML)
     legend_html = """
@@ -160,6 +199,13 @@ def crear_mapa(df: pd.DataFrame):
     </div>
     """
     m.get_root().html.add_child(Element(legend_html))
+
+    # Ajustar vista para que se vea el cuadrante (y marcadores si hay)
+    all_coords = CUADRANTE_COORDS.copy()
+    all_coords.extend(coords_markers)
+    bounds = _bounds_from_coords(all_coords)
+    if bounds:
+        m.fit_bounds(bounds, padding=(15, 15))
 
     folium.LayerControl().add_to(m)
     return m
@@ -304,8 +350,16 @@ def generar_pdf(df_filtrado: pd.DataFrame, fecha_inicio: datetime, fecha_fin: da
 # APP (una sola pestaña)
 # ==============================
 st.set_page_config(page_title="Reporte Mensajería", page_icon="🚚", layout="wide")
+
+# Login primero
+st.sidebar.header("Acceso")
+if not check_password():
+    st.title("🚚 Reporte de Mensajería – IDEMEFA")
+    st.info("Ingresa tus credenciales en el panel lateral.")
+    st.stop()
+
 st.title("🚚 Reporte de Mensajería – IDEMEFA")
-st.caption("Filtro por empleado y rango de fechas → mapa con marcadores y polígono de zona → tabla filtrada → subtotales diarios y total → descarga en PDF (solo tabla)")
+st.caption("Login → filtros por empleado y rango de fechas → mapa con polígono → tabla → subtotales diarios y total → PDF (solo tabla)")
 st.markdown("---")
 
 # Cargar datos
@@ -374,7 +428,7 @@ with c4:
 # ==============================
 # Mapa
 # ==============================
-st.subheader("🗺️ Mapa de entregas")
+st.subheader("🗺️ Mapa de entregas (centrado en GSD)")
 m = crear_mapa(df_filtrado)
 if m is not None:
     st_folium(m, width=1100, height=520)
