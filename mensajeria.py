@@ -1,22 +1,21 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import folium
 from streamlit_folium import st_folium
 from fpdf import FPDF
 import tempfile
 import os
+import requests
+import io
 
 # ==============================
-# CONFIGURACIÓN PARA STREAMLIT CLOUD
+# CONFIGURACIÓN
 # ==============================
-SHEET_ID = "1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik"
-WORKSHEET_NAME = "data"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# URL pública de tu Google Sheet (debes publicarla como CSV)
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik/export?format=csv"
 
-# Cuadrante geográfico (solo para visualización en el mapa)
+# Cuadrante geográfico
 cuadrante_coords = [
     [18.424446, -69.988949],
     [18.471448, -69.881432],
@@ -59,34 +58,18 @@ def check_password():
         return True
 
 # ==============================
-# CONEXIÓN A GOOGLE SHEETS
+# CONEXIÓN DIRECTA A GOOGLE SHEETS (SIN gspread)
 # ==============================
 @st.cache_data(ttl=300)
 def cargar_datos():
-    """Carga los datos desde Google Sheets usando secrets de Streamlit"""
+    """Carga los datos directamente desde Google Sheets como CSV"""
     try:
-        # Para Streamlit Cloud, las credenciales van en los secrets
-        if 'gcp_service_account' in st.secrets:
-            creds_dict = dict(st.secrets['gcp_service_account'])
-            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-        else:
-            # Para desarrollo local
-            SERVICE_JSON_PATH = "service_account.json"
-            if os.path.exists(SERVICE_JSON_PATH):
-                creds = Credentials.from_service_account_file(SERVICE_JSON_PATH, scopes=SCOPES)
-            else:
-                st.error("❌ No se encontraron credenciales. Configura los secrets en Streamlit Cloud.")
-                return pd.DataFrame()
+        # Descargar el CSV directamente
+        response = requests.get(SHEET_URL)
+        response.raise_for_status()
         
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
-        datos = sheet.get_all_records()
-        
-        if not datos:
-            st.warning("⚠️ No se encontraron datos en la hoja")
-            return pd.DataFrame()
-        
-        df = pd.DataFrame(datos)
+        # Leer el CSV
+        df = pd.read_csv(io.StringIO(response.text))
         
         # Convertir columnas
         if 'Fecha de llenar' in df.columns:
@@ -101,28 +84,8 @@ def cargar_datos():
         
     except Exception as e:
         st.error(f"❌ Error cargando datos: {str(e)}")
+        st.info("💡 Asegúrate de que tu Google Sheet esté publicada como CSV")
         return pd.DataFrame()
-
-# ==============================
-# FUNCIÓN SIMPLIFICADA PARA VERIFICAR CUADRANTE (sin Shapely)
-# ==============================
-def esta_en_cuadrante_simple(lat, lon):
-    """Verifica si un punto está dentro del cuadrante usando bounding box simple"""
-    try:
-        if pd.isna(lat) or pd.isna(lon):
-            return False
-        
-        # Obtener los límites del cuadrante
-        lats = [coord[0] for coord in cuadrante_coords]
-        lons = [coord[1] for coord in cuadrante_coords]
-        
-        lat_min, lat_max = min(lats), max(lats)
-        lon_min, lon_max = min(lons), max(lons)
-        
-        # Verificación simple por bounding box (aproximación)
-        return (lat_min <= lat <= lat_max) and (lon_min <= lon <= lon_max)
-    except:
-        return False
 
 # ==============================
 # FUNCIONES DE MAPA
@@ -144,7 +107,7 @@ def crear_mapa(df_filtrado):
     
     mapa = folium.Map(location=[lat_center, lon_center], zoom_start=12)
     
-    # Agregar cuadrante (solo visualización)
+    # Agregar cuadrante
     folium.Polygon(
         locations=cuadrante_coords,
         color='blue',
@@ -344,9 +307,15 @@ def main_app():
     df = cargar_datos()
     
     if df.empty:
-        st.error("No se pudieron cargar los datos. Verifique:")
-        st.error("1. Que el Google Sheet esté compartido correctamente")
-        st.error("2. Que las credenciales estén configuradas en Streamlit Secrets")
+        st.error("No se pudieron cargar los datos.")
+        st.info("""
+        **Para solucionar este problema:**
+        1. Ve a tu Google Sheet: https://docs.google.com/spreadsheets/d/1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik/edit
+        2. Haz clic en **Archivo → Compartir → Publicar en la web**
+        3. Selecciona **'data'** como hoja y **CSV** como formato
+        4. Haz clic en **Publicar**
+        5. Actualiza esta página
+        """)
         return
     
     # Sidebar con filtros
