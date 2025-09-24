@@ -1,7 +1,6 @@
 streamlit==1.28.0
 pandas==1.5.3
-gspread==5.8.0
-google-auth==2.16.0
 folium==0.14.0
 streamlit-folium==0.10.0
 fpdf2==2.5.7
+requests==2.31.0
