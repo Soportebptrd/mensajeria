@@ -1,6 +1,6 @@
-streamlit==1.28.0
-pandas==1.5.3
-folium==0.14.0
-streamlit-folium==0.10.0
-fpdf2==2.5.7
-requests==2.31.0
+streamlit
+pandas
+folium
+streamlit-folium
+fpdf2
+requests
