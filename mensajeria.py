@@ -5,35 +5,30 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import folium
 from streamlit_folium import st_folium
-from shapely.geometry import Point, Polygon
 from fpdf import FPDF
 import tempfile
 import os
-import json
 
 # ==============================
 # CONFIGURACIÓN PARA STREAMLIT CLOUD
 # ==============================
-# En Streamlit Cloud, usaremos secrets para las credenciales
 SHEET_ID = "1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik"
 WORKSHEET_NAME = "data"
-
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Cuadrante geográfico
+# Cuadrante geográfico (usaremos una aproximación simple sin Shapely)
 cuadrante_coords = [
-    (-69.988949, 18.424446),
-    (-69.881432, 18.471448),
-    (-69.879462, 18.507120),
-    (-69.896407, 18.513480),
-    (-69.915497, 18.509511),
-    (-69.958319, 18.505557),
-    (-69.968240, 18.491012),
-    (-69.967454, 18.479161),
-    (-69.975032, 18.449450),
-    (-69.990303, 18.428729)
+    [18.424446, -69.988949],
+    [18.471448, -69.881432],
+    [18.507120, -69.879462],
+    [18.513480, -69.896407],
+    [18.509511, -69.915497],
+    [18.505557, -69.958319],
+    [18.491012, -69.968240],
+    [18.479161, -69.967454],
+    [18.449450, -69.975032],
+    [18.428729, -69.990303]
 ]
-cuadrante_polygon = Polygon(cuadrante_coords)
 
 # ==============================
 # AUTENTICACIÓN
@@ -64,7 +59,7 @@ def check_password():
         return True
 
 # ==============================
-# CONEXIÓN A GOOGLE SHEETS (STREAMLIT CLOUD)
+# CONEXIÓN A GOOGLE SHEETS
 # ==============================
 @st.cache_data(ttl=300)
 def cargar_datos():
@@ -72,21 +67,18 @@ def cargar_datos():
     try:
         # Para Streamlit Cloud, las credenciales van en los secrets
         if 'gcp_service_account' in st.secrets:
-            # Usar secrets de Streamlit Cloud
             creds_dict = dict(st.secrets['gcp_service_account'])
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         else:
-            # Para desarrollo local (usar archivo JSON)
+            # Para desarrollo local
             SERVICE_JSON_PATH = "service_account.json"
             if os.path.exists(SERVICE_JSON_PATH):
                 creds = Credentials.from_service_account_file(SERVICE_JSON_PATH, scopes=SCOPES)
             else:
-                st.error("❌ No se encontraron credenciales. Configura los secrets en Streamlit Cloud.")
+                st.error("❌ No se encontraron credenciales.")
                 return pd.DataFrame()
         
         client = gspread.authorize(creds)
-        
-        # Conectar usando el ID directo de la hoja
         sheet = client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
         datos = sheet.get_all_records()
         
@@ -110,6 +102,25 @@ def cargar_datos():
     except Exception as e:
         st.error(f"❌ Error cargando datos: {str(e)}")
         return pd.DataFrame()
+
+# ==============================
+# FUNCIÓN SIMPLIFICADA PARA VERIFICAR CUADRANTE
+# ==============================
+def esta_en_cuadrante(lat, lon):
+    """Verifica si un punto está dentro del cuadrante (aproximación simple)"""
+    try:
+        if pd.isna(lat) or pd.isna(lon):
+            return False
+        
+        # Coordenadas límite del cuadrante
+        lat_min = min(coord[0] for coord in cuadrante_coords)
+        lat_max = max(coord[0] for coord in cuadrante_coords)
+        lon_min = min(coord[1] for coord in cuadrante_coords)
+        lon_max = max(coord[1] for coord in cuadrante_coords)
+        
+        return (lat_min <= lat <= lat_max) and (lon_min <= lon <= lon_max)
+    except:
+        return False
 
 # ==============================
 # FUNCIONES DE MAPA
@@ -326,9 +337,7 @@ def main_app():
     df = cargar_datos()
     
     if df.empty:
-        st.error("No se pudieron cargar los datos. Verifique:")
-        st.error("1. Que el Google Sheet esté compartido correctamente")
-        st.error("2. Que las credenciales estén configuradas en Streamlit Secrets")
+        st.error("No se pudieron cargar los datos.")
         return
     
     # Sidebar con filtros
