@@ -12,11 +12,11 @@ import io
 # ==============================
 # CONFIGURACIÓN
 # ==============================
-# URL pública de tu Google Sheet (debes publicarla como CSV)
+# URL pública del Google Sheet (publicada como CSV)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik/export?format=csv"
 
-# Cuadrante geográfico
-cuadrante_coords = [
+# Coordenadas del cuadrante (polígono)
+CUADRANTE_COORDS = [
     [18.424446, -69.988949],
     [18.471448, -69.881432],
     [18.507120, -69.879462],
@@ -26,420 +26,381 @@ cuadrante_coords = [
     [18.491012, -69.968240],
     [18.479161, -69.967454],
     [18.449450, -69.975032],
-    [18.428729, -69.990303]
+    [18.428729, -69.990303],
+]
+
+# Columnas esperadas para la tabla
+COLUMNAS_TABLA = [
+    'Empleado',
+    'Tipo',
+    'Dirección de envío',
+    'Fecha de llenar',
+    'Nombre del cliente (usuario/codigo)',
+    'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)',
+    'Pago',
 ]
 
 # ==============================
-# AUTENTICACIÓN
-# ==============================
-def check_password():
-    """Verifica la contraseña ingresada"""
-    def password_entered():
-        if (st.session_state["username"] == "idemefa" and 
-            st.session_state["password"] == "idemefa"):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-            del st.session_state["username"]
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        st.text_input("Usuario", key="username")
-        st.text_input("Contraseña", type="password", key="password")
-        st.button("Ingresar", on_click=password_entered)
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Usuario", key="username")
-        st.text_input("Contraseña", type="password", key="password")
-        st.button("Ingresar", on_click=password_entered)
-        st.error("😕 Usuario o contraseña incorrectos")
-        return False
-    else:
-        return True
-
-# ==============================
-# CONEXIÓN DIRECTA A GOOGLE SHEETS (SIN gspread)
+# UTILIDADES
 # ==============================
 @st.cache_data(ttl=300)
-def cargar_datos():
-    """Carga los datos directamente desde Google Sheets como CSV"""
+def cargar_datos(url: str) -> pd.DataFrame:
+    """Descarga el CSV publicado del Google Sheet y normaliza columnas clave."""
     try:
-        # Descargar el CSV directamente
-        response = requests.get(SHEET_URL)
-        response.raise_for_status()
-        
-        # Leer el CSV
-        df = pd.read_csv(io.StringIO(response.text))
-        
-        # Convertir columnas
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+
+        # Normalización de columnas conocidas
         if 'Fecha de llenar' in df.columns:
             df['Fecha de llenar'] = pd.to_datetime(df['Fecha de llenar'], errors='coerce')
-        
-        for col in ['Pago', 'Latitud', 'Longitud']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        st.success(f"✅ Datos cargados: {len(df)} registros")
+        if 'Pago' in df.columns:
+            df['Pago'] = pd.to_numeric(df['Pago'], errors='coerce')
+        if 'Latitud' in df.columns:
+            df['Latitud'] = pd.to_numeric(df['Latitud'], errors='coerce')
+        if 'Longitud' in df.columns:
+            df['Longitud'] = pd.to_numeric(df['Longitud'], errors='coerce')
+
+        # Quitar filas completamente vacías
+        df = df.dropna(how='all')
         return df
-        
     except Exception as e:
-        st.error(f"❌ Error cargando datos: {str(e)}")
-        st.info("💡 Asegúrate de que tu Google Sheet esté publicada como CSV")
+        st.error(f"❌ Error cargando datos de Google Sheets: {e}")
+        st.info("Verifica que la hoja esté publicada en Archivo → Compartir → Publicar en la web → Hoja 'data' en formato CSV")
         return pd.DataFrame()
 
-# ==============================
-# FUNCIONES DE MAPA
-# ==============================
-def crear_mapa(df_filtrado):
-    """Crea un mapa interactivo con los puntos y el cuadrante"""
-    if df_filtrado.empty or 'Latitud' not in df_filtrado.columns or 'Longitud' not in df_filtrado.columns:
+
+def crear_mapa(df: pd.DataFrame):
+    """Construye un mapa Folium con polígono/leyenda y marcadores coloreados por Pago (25/75)."""
+    cols_coord_ok = {'Latitud', 'Longitud'}.issubset(set(df.columns))
+    if df.empty or not cols_coord_ok:
         return None
-    
-    # Filtrar filas con coordenadas válidas
-    df_coordenadas = df_filtrado.dropna(subset=['Latitud', 'Longitud'])
-    
-    if df_coordenadas.empty:
+
+    df = df.dropna(subset=['Latitud', 'Longitud'])
+    if df.empty:
         return None
-    
-    # Centro del mapa (Santo Domingo por defecto)
-    lat_center = df_coordenadas['Latitud'].mean() if not df_coordenadas.empty else 18.4861
-    lon_center = df_coordenadas['Longitud'].mean() if not df_coordenadas.empty else -69.9312
-    
-    mapa = folium.Map(location=[lat_center, lon_center], zoom_start=12)
-    
-    # Agregar cuadrante
+
+    lat_center = df['Latitud'].mean()
+    lon_center = df['Longitud'].mean()
+
+    m = folium.Map(location=[lat_center, lon_center], zoom_start=12, control_scale=True)
+
+    # Polígono del cuadrante (zona $25)
     folium.Polygon(
-        locations=cuadrante_coords,
+        locations=CUADRANTE_COORDS,
         color='blue',
+        weight=2,
         fill=True,
         fill_color='blue',
-        fill_opacity=0.1,
+        fill_opacity=0.10,
         popup='Cuadrante de Zona ($25)',
-        tooltip='Zona de $25'
-    ).add_to(mapa)
-    
-    # Agregar puntos
-    for _, row in df_coordenadas.iterrows():
-        # Color según el pago
-        if row['Pago'] == 25:
-            color = 'green'
-            icono = 'ok-sign'
-            tooltip_text = "Dentro cuadrante ($25)"
-        elif row['Pago'] == 75:
-            color = 'red'
-            icono = 'remove-sign'
-            tooltip_text = "Fuera cuadrante ($75)"
+        tooltip='Zona de $25',
+    ).add_to(m)
+
+    # Marcadores
+    for _, row in df.iterrows():
+        pago = row.get('Pago', None)
+        if pd.notna(pago) and float(pago) == 25:
+            color = 'green'; icono = 'ok-sign'; tip = 'Dentro cuadrante ($25)'
+        elif pd.notna(pago) and float(pago) == 75:
+            color = 'red'; icono = 'remove-sign'; tip = 'Fuera cuadrante ($75)'
         else:
-            color = 'gray'
-            icono = 'question-sign'
-            tooltip_text = "IDEMEFA ($0)"
-        
-        # Popup con información
-        fecha_str = row['Fecha de llenar'].strftime('%d/%m/%Y %H:%M') if pd.notna(row.get('Fecha de llenar')) else 'N/A'
-        
+            color = 'gray'; icono = 'question-sign'; tip = 'Sin clasificación'
+
+        fecha_val = row.get('Fecha de llenar', pd.NaT)
+        fecha_str = fecha_val.strftime('%d/%m/%Y %H:%M') if pd.notna(fecha_val) else 'N/A'
+
         popup_html = f"""
-        <div style="width: 250px;">
-            <h4>Detalle de Entrega</h4>
-            <p><b>Colaborador:</b> {row.get('Empleado', 'N/A')}</p>
-            <p><b>Cliente:</b> {row.get('Nombre del cliente (usuario/codigo)', 'N/A')}</p>
-            <p><b>Pago:</b> ${row.get('Pago', 0)}</p>
-            <p><b>Fecha:</b> {fecha_str}</p>
-            <p><b>Dirección:</b> {str(row.get('Dirección de envío', 'N/A'))[:50]}...</p>
+        <div style='width:260px;'>
+            <h4 style='margin:0 0 6px 0;'>Detalle de Entrega</h4>
+            <p style='margin:0;'><b>Colaborador:</b> {row.get('Empleado', 'N/A')}</p>
+            <p style='margin:0;'><b>Cliente:</b> {row.get('Nombre del cliente (usuario/codigo)', 'N/A')}</p>
+            <p style='margin:0;'><b>Pago:</b> ${row.get('Pago', 'N/A')}</p>
+            <p style='margin:0;'><b>Fecha:</b> {fecha_str}</p>
+            <p style='margin:0;'><b>Dirección:</b> {str(row.get('Dirección de envío', 'N/A'))[:60]}...</p>
         </div>
         """
-        
+
         folium.Marker(
             location=[row['Latitud'], row['Longitud']],
-            popup=folium.Popup(popup_html, max_width=300),
-            tooltip=tooltip_text,
-            icon=folium.Icon(color=color, icon=icono, prefix='glyphicon')
-        ).add_to(mapa)
-    
-    return mapa
+            popup=folium.Popup(popup_html, max_width=320),
+            tooltip=tip,
+            icon=folium.Icon(color=color, icon=icono, prefix='glyphicon'),
+        ).add_to(m)
+
+    # Pequeña leyenda manual
+    folium.map.CustomIcon
+    folium.LayerControl().add_to(m)
+    return m
+
 
 # ==============================
-# GENERACIÓN DE PDF
+# PDF – solo tabla + subtotales diarios + total general
 # ==============================
-def generar_pdf(df_filtrado, fecha_inicio, fecha_fin, colaborador_seleccionado):
-    """Genera un PDF con el reporte detallado"""
-    
-    class PDF(FPDF):
-        def header(self):
-            self.set_font('Arial', 'B', 12)
-            self.cell(0, 10, 'Reporte de Mensajería - IDEMEFA', 0, 1, 'C')
-            self.ln(5)
-        
-        def footer(self):
-            self.set_y(-15)
-            self.set_font('Arial', 'I', 8)
-            self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
-    
-    pdf = PDF()
+class ReportPDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, 'Reporte de Mensajería - IDEMEFA', 0, 1, 'C')
+        self.ln(2)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
+
+
+def _add_table_header(pdf: ReportPDF, headers, widths):
+    pdf.set_font('Arial', 'B', 8)
+    for h, w in zip(headers, widths):
+        h_txt = (h[:28] + '...') if len(h) > 31 else h
+        pdf.cell(w, 8, h_txt, 1)
+    pdf.ln()
+
+
+def _add_row(pdf: ReportPDF, values, widths):
+    pdf.set_font('Arial', '', 7)
+    for v, w in zip(values, widths):
+        txt = str(v) if v is not None else ''
+        if len(txt) > 45:
+            txt = txt[:45] + '...'
+        pdf.cell(w, 7, txt, 1)
+    pdf.ln()
+
+
+def generar_pdf(df_filtrado: pd.DataFrame, fecha_inicio: datetime, fecha_fin: datetime, colaborador: str):
+    pdf = ReportPDF()
     pdf.add_page()
-    pdf.set_font('Arial', 'B', 14)
-    
-    # Título
-    pdf.cell(0, 10, 'REPORTE DETALLADO DE MENSAJERÍA', 0, 1, 'C')
-    pdf.ln(5)
-    
-    # Información del reporte
+
+    # Encabezado de reporte
+    pdf.set_font('Arial', 'B', 13)
+    pdf.cell(0, 10, 'REPORTE DETALLADO (Solo tabla)', 0, 1, 'C')
+    pdf.ln(2)
+
     pdf.set_font('Arial', '', 10)
-    pdf.cell(0, 8, f'Período: {fecha_inicio.strftime("%d/%m/%Y")} - {fecha_fin.strftime("%d/%m/%Y")}', 0, 1)
-    pdf.cell(0, 8, f'Colaborador: {colaborador_seleccionado if colaborador_seleccionado != "Total" else "Todos"}', 0, 1)
-    pdf.cell(0, 8, f'Generado: {datetime.now().strftime("%d/%m/%Y %H:%M")}', 0, 1)
-    pdf.ln(10)
-    
-    # Resumen por día
-    if not df_filtrado.empty and 'Fecha de llenar' in df_filtrado.columns:
-        pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0, 10, 'RESUMEN POR DÍA', 0, 1)
-        pdf.ln(5)
-        
-        # Agrupar por fecha
-        resumen_diario = df_filtrado.groupby(df_filtrado['Fecha de llenar'].dt.date).agg({
-            'Empleado': 'count',
-            'Pago': 'sum'
-        }).reset_index()
-        
-        resumen_diario.columns = ['Fecha', 'Check-ins', 'Monto_Total']
-        
-        # Tabla de resumen
-        pdf.set_font('Arial', 'B', 10)
-        pdf.cell(40, 10, 'Fecha', 1)
-        pdf.cell(30, 10, 'Día', 1)
-        pdf.cell(30, 10, 'Check-ins', 1)
-        pdf.cell(40, 10, 'Monto Total', 1)
-        pdf.ln()
-        
-        pdf.set_font('Arial', '', 10)
-        total_general_checkins = 0
-        total_general_monto = 0
-        
-        for _, fila in resumen_diario.iterrows():
-            fecha = fila['Fecha']
-            dia_semana = fecha.strftime('%A')
-            dias_esp = {
-                'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
-                'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado'
-            }
-            
-            pdf.cell(40, 10, fecha.strftime('%d/%m/%Y'), 1)
-            pdf.cell(30, 10, dias_esp.get(dia_semana, dia_semana), 1)
-            pdf.cell(30, 10, str(fila['Check-ins']), 1)
-            pdf.cell(40, 10, f"${fila['Monto_Total']:,.2f}", 1)
-            pdf.ln()
-            
-            total_general_checkins += fila['Check-ins']
-            total_general_monto += fila['Monto_Total']
-        
-        # Totales
-        pdf.set_font('Arial', 'B', 10)
-        pdf.cell(70, 10, 'TOTAL GENERAL', 1)
-        pdf.cell(30, 10, str(total_general_checkins), 1)
-        pdf.cell(40, 10, f"${total_general_monto:,.2f}", 1)
-        pdf.ln(15)
-    
-    # Detalle de entregas
-    pdf.set_font('Arial', 'B', 12)
-    pdf.cell(0, 10, 'DETALLE DE ENTREGAS', 0, 1)
-    pdf.ln(5)
-    
-    # Columnas para el detalle
-    columnas_pdf = [
-        'Dirección de envío', 
-        'Lugar de envío', 
-        'Nombre del cliente (usuario/codigo)',
-        'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)',
-        'Pago'
-    ]
-    
-    # Verificar qué columnas están disponibles
-    columnas_disponibles = [col for col in columnas_pdf if col in df_filtrado.columns]
-    
-    if columnas_disponibles:
-        anchos = [60, 25, 35, 35, 15]
-        
-        # Encabezados de tabla detalle
-        pdf.set_font('Arial', 'B', 8)
-        for i, columna in enumerate(columnas_disponibles):
-            nombre_corto = columna[:20] + '...' if len(columna) > 20 else columna
-            pdf.cell(anchos[i], 10, nombre_corto, 1)
-        pdf.ln()
-        
-        # Datos detallados
-        pdf.set_font('Arial', '', 7)
-        for _, fila in df_filtrado.iterrows():
-            valores = []
-            for columna in columnas_disponibles:
-                valor = str(fila.get(columna, ''))
-                if columna == 'Lugar de envío' and valor.upper() != 'IDEMEFA':
-                    valor = ''
-                elif len(valor) > 30:
-                    valor = valor[:30] + '...'
-                valores.append(valor)
-            
-            for i, valor in enumerate(valores):
-                pdf.cell(anchos[i], 8, valor, 1)
-            pdf.ln()
-            
-            # Verificar si necesita nueva página
-            if pdf.get_y() > 250:
+    periodo_txt = f"Período: {fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')}"
+    colab_txt = f"Colaborador: {'Todos' if colaborador == 'Total' else colaborador}"
+    gen_txt = f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    for line in (periodo_txt, colab_txt, gen_txt):
+        pdf.cell(0, 7, line, 0, 1)
+    pdf.ln(4)
+
+    # Asegurar columnas
+    cols_presentes = [c for c in COLUMNAS_TABLA if c in df_filtrado.columns]
+    # Ajustes de ancho (suma aprox 190)
+    widths_map = {
+        'Empleado': 25,
+        'Tipo': 16,
+        'Dirección de envío': 48,
+        'Fecha de llenar': 26,
+        'Nombre del cliente (usuario/codigo)': 35,
+        'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)': 40,
+        'Pago': 16,
+    }
+    widths = [widths_map.get(c, 28) for c in cols_presentes]
+
+    # Ordenar por fecha para subtotales
+    if 'Fecha de llenar' in df_filtrado.columns:
+        df_filtrado = df_filtrado.sort_values('Fecha de llenar')
+
+    # Subtotales por día
+    if 'Fecha de llenar' in df_filtrado.columns:
+        df_filtrado['__FechaD__'] = df_filtrado['Fecha de llenar'].dt.date
+    else:
+        df_filtrado['__FechaD__'] = None
+
+    total_general = 0.0
+    total_checkins = 0
+
+    for fecha_dia, df_dia in df_filtrado.groupby('__FechaD__'):
+        # Título de día
+        titulo_dia = fecha_dia.strftime('%d/%m/%Y') if isinstance(fecha_dia, datetime.date) else 'Sin fecha'
+        pdf.set_font('Arial', 'B', 11)
+        pdf.cell(0, 8, f"Día: {titulo_dia}", 0, 1)
+
+        _add_table_header(pdf, cols_presentes, widths)
+
+        for _, r in df_dia.iterrows():
+            vals = []
+            for c in cols_presentes:
+                val = r.get(c, '')
+                if c == 'Fecha de llenar' and pd.notna(val):
+                    val = pd.to_datetime(val).strftime('%d/%m/%Y %H:%M')
+                vals.append(val)
+            _add_row(pdf, vals, widths)
+
+            # salto de página si es necesario
+            if pdf.get_y() > 265:
                 pdf.add_page()
-                pdf.set_font('Arial', 'B', 8)
-                for i, columna in enumerate(columnas_disponibles):
-                    nombre_corto = columna[:20] + '...' if len(columna) > 20 else columna
-                    pdf.cell(anchos[i], 10, nombre_corto, 1)
-                pdf.ln()
-                pdf.set_font('Arial', '', 7)
-    
+                _add_table_header(pdf, cols_presentes, widths)
+
+        # Subtotal del día
+        monto_dia = df_dia['Pago'].sum() if 'Pago' in df_dia.columns else 0
+        checkins_dia = len(df_dia)
+        total_general += float(monto_dia or 0)
+        total_checkins += int(checkins_dia)
+
+        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(sum(widths[:-2]), 8, 'Subtotal del día', 1)
+        pdf.cell(widths[-2], 8, str(checkins_dia), 1)
+        pdf.cell(widths[-1], 8, f"${monto_dia:,.2f}", 1)
+        pdf.ln(10)
+
+    # Totales generales
+    pdf.ln(2)
+    pdf.set_font('Arial', 'B', 11)
+    pdf.cell(0, 8, 'TOTAL GENERAL DEL PERIODO', 0, 1)
+
+    pdf.set_font('Arial', 'B', 10)
+    pdf.cell(60, 8, 'Check-ins', 1)
+    pdf.cell(60, 8, 'Monto total', 1)
+    pdf.ln()
+
+    pdf.set_font('Arial', '', 10)
+    pdf.cell(60, 8, str(total_checkins), 1)
+    pdf.cell(60, 8, f"${total_general:,.2f}", 1)
+
     return pdf
 
-# ==============================
-# INTERFAZ PRINCIPAL
-# ==============================
-def main_app():
-    st.set_page_config(page_title="Reporte Mensajería", page_icon="🚚", layout="wide")
-    
-    st.title("🚚 Reporte de Mensajería - IDEMEFA")
-    st.markdown("---")
-    
-    # Cargar datos
-    df = cargar_datos()
-    
-    if df.empty:
-        st.error("No se pudieron cargar los datos.")
-        st.info("""
-        **Para solucionar este problema:**
-        1. Ve a tu Google Sheet: https://docs.google.com/spreadsheets/d/1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik/edit
-        2. Haz clic en **Archivo → Compartir → Publicar en la web**
-        3. Selecciona **'data'** como hoja y **CSV** como formato
-        4. Haz clic en **Publicar**
-        5. Actualiza esta página
-        """)
-        return
-    
-    # Sidebar con filtros
-    st.sidebar.header("Filtros")
-    
-    # Filtro de fechas
-    if 'Fecha de llenar' in df.columns:
-        fecha_min = df['Fecha de llenar'].min()
-        fecha_max = df['Fecha de llenar'].max()
-    else:
-        fecha_min = datetime.now() - timedelta(days=30)
-        fecha_max = datetime.now()
-    
-    rango_fechas = st.sidebar.date_input(
-        "Rango de fechas",
-        value=(fecha_min.date(), fecha_max.date()),
-        min_value=fecha_min.date(),
-        max_value=fecha_max.date()
-    )
-    
-    # Filtro de colaboradores
-    colaboradores = ['Total'] 
-    if 'Empleado' in df.columns:
-        colaboradores += sorted(df['Empleado'].dropna().unique().tolist())
-    
-    colaborador_seleccionado = st.sidebar.selectbox("Colaborador", colaboradores)
-    
-    # Aplicar filtros
-    if len(rango_fechas) == 2 and 'Fecha de llenar' in df.columns:
-        fecha_inicio = pd.to_datetime(rango_fechas[0])
-        fecha_fin = pd.to_datetime(rango_fechas[1]) + timedelta(days=1)
-        
-        df_filtrado = df[
-            (df['Fecha de llenar'] >= fecha_inicio) & 
-            (df['Fecha de llenar'] <= fecha_fin)
-        ]
-        
-        if colaborador_seleccionado != 'Total' and 'Empleado' in df_filtrado.columns:
-            df_filtrado = df_filtrado[df_filtrado['Empleado'] == colaborador_seleccionado]
-    else:
-        df_filtrado = df.copy()
-    
-    # Métricas principales
-    st.subheader("📊 Resumen General")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_entregas = len(df_filtrado)
-        st.metric("📦 Total Entregas", total_entregas)
-    
-    with col2:
-        total_pago = df_filtrado['Pago'].sum() if 'Pago' in df_filtrado.columns and not df_filtrado.empty else 0
-        st.metric("💰 Monto Total", f"${total_pago:,.2f}")
-    
-    with col3:
-        entregas_25 = len(df_filtrado[(df_filtrado['Pago'] == 25)]) if 'Pago' in df_filtrado.columns and not df_filtrado.empty else 0
-        st.metric("🟢 Entregas $25", entregas_25)
-    
-    with col4:
-        entregas_75 = len(df_filtrado[(df_filtrado['Pago'] == 75)]) if 'Pago' in df_filtrado.columns and not df_filtrado.empty else 0
-        st.metric("🔴 Entregas $75", entregas_75)
-    
-    # Mapa interactivo
-    st.subheader("🗺️ Mapa de Entregas")
-    if not df_filtrado.empty:
-        mapa = crear_mapa(df_filtrado)
-        if mapa:
-            st_folium(mapa, width=1200, height=500)
-        else:
-            st.warning("No hay datos con coordenadas válidas para mostrar en el mapa.")
-    else:
-        st.info("No hay datos para mostrar en el mapa con los filtros seleccionados.")
-    
-    # Tabla de datos
-    st.subheader("📋 Detalle de Entregas")
-    
-    # Columnas a mostrar
-    columnas_mostrar = [
-        'Empleado', 'Fecha de llenar', 'Dirección de envío', 
-        'Lugar de envío', 'Nombre del cliente (usuario/codigo)',
-        'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)',
-        'Pago'
-    ]
-    
-    columnas_disponibles = [col for col in columnas_mostrar if col in df_filtrado.columns]
-    
-    if not df_filtrado.empty:
-        st.dataframe(df_filtrado[columnas_disponibles], use_container_width=True)
-        
-        # Botón para generar PDF
-        st.subheader("📄 Generar Reporte")
-        if st.button("Generar Reporte PDF", type="primary"):
-            with st.spinner("Generando PDF..."):
-                try:
-                    pdf = generar_pdf(df_filtrado, fecha_inicio, fecha_fin, colaborador_seleccionado)
-                    
-                    # Guardar PDF temporal
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                        pdf.output(tmp_file.name)
-                        
-                        # Leer el archivo y crear botón de descarga
-                        with open(tmp_file.name, "rb") as file:
-                            pdf_bytes = file.read()
-                        
-                        st.download_button(
-                            label="⬇️ Descargar PDF",
-                            data=pdf_bytes,
-                            file_name=f"reporte_mensajeria_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                            mime="application/pdf",
-                            type="primary"
-                        )
-                    
-                    # Limpiar archivo temporal
-                    os.unlink(tmp_file.name)
-                    st.success("✅ PDF generado correctamente")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error generando PDF: {str(e)}")
-    else:
-        st.info("No hay datos para mostrar con los filtros seleccionados.")
 
 # ==============================
-# EJECUCIÓN PRINCIPAL
+# APP (una sola pestaña)
 # ==============================
-if __name__ == "__main__":
-    if check_password():
-        main_app()
+st.set_page_config(page_title="Reporte Mensajería", page_icon="🚚", layout="wide")
+st.title("🚚 Reporte de Mensajería – IDEMEFA")
+st.caption("Filtro por empleado y rango de fechas → mapa con marcadores y polígono de zona → tabla filtrada → subtotales diarios y total → descarga en PDF (solo tabla)")
+st.markdown("---")
+
+# Cargar datos
+with st.spinner("Cargando datos..."):
+    df = cargar_datos(SHEET_URL)
+
+if df.empty:
+    st.stop()
+
+# Sidebar – filtros
+st.sidebar.header("Filtros")
+
+# Rango de fechas
+if 'Fecha de llenar' in df.columns and df['Fecha de llenar'].notna().any():
+    fecha_min = pd.to_datetime(df['Fecha de llenar'].min())
+    fecha_max = pd.to_datetime(df['Fecha de llenar'].max())
+else:
+    fecha_min = datetime.now() - timedelta(days=30)
+    fecha_max = datetime.now()
+
+rango = st.sidebar.date_input(
+    "Rango de fechas",
+    value=(fecha_min.date(), fecha_max.date()),
+    min_value=min(fecha_min.date(), fecha_max.date()),
+    max_value=max(fecha_min.date(), fecha_max.date()),
+)
+
+# Colaborador
+colaboradores = ['Total']
+if 'Empleado' in df.columns:
+    colaboradores += sorted([x for x in df['Empleado'].dropna().unique().tolist() if str(x).strip() != ''])
+colab_sel = st.sidebar.selectbox("Colaborador", colaboradores)
+
+# Aplicar filtros
+if isinstance(rango, (list, tuple)) and len(rango) == 2:
+    fecha_inicio = pd.to_datetime(rango[0])
+    fecha_fin = pd.to_datetime(rango[1]) + timedelta(days=1) - timedelta(seconds=1)
+else:
+    fecha_inicio = fecha_min
+    fecha_fin = fecha_max
+
+mask = pd.Series([True] * len(df))
+if 'Fecha de llenar' in df.columns:
+    mask &= (df['Fecha de llenar'] >= fecha_inicio) & (df['Fecha de llenar'] <= fecha_fin)
+if colab_sel != 'Total' and 'Empleado' in df.columns:
+    mask &= (df['Empleado'] == colab_sel)
+
+df_filtrado = df.loc[mask].copy()
+
+# ==============================
+# Métricas rápidas
+# ==============================
+st.subheader("📊 Resumen")
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.metric("Total entregas", len(df_filtrado))
+with c2:
+    st.metric("Monto total", f"${(df_filtrado['Pago'].sum() if 'Pago' in df_filtrado.columns else 0):,.2f}")
+with c3:
+    v25 = int((df_filtrado['Pago'] == 25).sum() if 'Pago' in df_filtrado.columns else 0)
+    st.metric("Entregas $25", v25)
+with c4:
+    v75 = int((df_filtrado['Pago'] == 75).sum() if 'Pago' in df_filtrado.columns else 0)
+    st.metric("Entregas $75", v75)
+
+# ==============================
+# Mapa
+# ==============================
+st.subheader("🗺️ Mapa de entregas")
+m = crear_mapa(df_filtrado)
+if m is not None:
+    st_folium(m, width=1100, height=520)
+else:
+    st.info("No hay coordenadas válidas para mostrar con los filtros actuales.")
+
+# ==============================
+# Tabla + subtotales por día (en pantalla)
+# ==============================
+st.subheader("📋 Detalle filtrado")
+cols_disp = [c for c in COLUMNAS_TABLA if c in df_filtrado.columns]
+
+if cols_disp:
+    df_vis = df_filtrado[cols_disp].copy()
+    # Formato de fecha visible
+    if 'Fecha de llenar' in df_vis.columns:
+        df_vis['Fecha de llenar'] = pd.to_datetime(df_vis['Fecha de llenar'], errors='coerce')
+    st.dataframe(df_vis, use_container_width=True)
+
+    # Subtotales por día
+    if 'Fecha de llenar' in df_filtrado.columns:
+        st.markdown("#### Subtotales por día (según filtros)")
+        tmp = df_filtrado.copy()
+        tmp['__FechaD__'] = tmp['Fecha de llenar'].dt.date
+        resumen = tmp.groupby('__FechaD__').agg(
+            Checkins=('Empleado', 'count'),
+            Monto_Total=('Pago', 'sum')
+        ).reset_index().rename(columns={'__FechaD__': 'Fecha'})
+        resumen['Fecha'] = pd.to_datetime(resumen['Fecha'])
+        resumen = resumen.sort_values('Fecha')
+        st.dataframe(resumen, use_container_width=True)
+
+        total_checkins = int(resumen['Checkins'].sum()) if not resumen.empty else 0
+        total_monto = float(resumen['Monto_Total'].sum()) if not resumen.empty else 0.0
+        st.markdown(f"**Total general del período:** {total_checkins} check-ins | ${total_monto:,.2f}")
+
+    # ==============================
+    # PDF – solo tabla con subtotales y total
+    # ==============================
+    st.subheader("📄 Descargar PDF (solo tabla)")
+    if st.button("Generar PDF", type="primary"):
+        with st.spinner("Generando PDF..."):
+            try:
+                pdf = generar_pdf(
+                    df_filtrado=df_filtrado[cols_disp].copy(),
+                    fecha_inicio=pd.to_datetime(fecha_inicio),
+                    fecha_fin=pd.to_datetime(fecha_fin),
+                    colaborador=colab_sel,
+                )
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                    pdf.output(tmp.name)
+                    tmp.flush()
+                    with open(tmp.name, 'rb') as f:
+                        data = f.read()
+                st.download_button(
+                    label="⬇️ Descargar PDF",
+                    data=data,
+                    file_name=f"reporte_mensajeria_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                )
+                os.unlink(tmp.name)
+                st.success("PDF generado correctamente.")
+            except Exception as e:
+                st.error(f"Error generando PDF: {e}")
+else:
+    st.info("No se encontraron las columnas requeridas en los datos para mostrar la tabla.")
