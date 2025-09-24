@@ -1,10 +1,7 @@
-streamlit
-pandas
-gspread
-google-auth
-folium
-streamlit-folium
-fpdf2
-plotly
-pygeos
-geopandas
+streamlit==1.28.0
+pandas==2.0.3
+gspread==5.11.0
+google-auth==2.22.0
+folium==0.14.0
+streamlit-folium==0.15.1
+fpdf2==2.7.4
