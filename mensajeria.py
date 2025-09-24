@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import folium
 from streamlit_folium import st_folium
 from fpdf import FPDF
@@ -8,6 +8,7 @@ import tempfile
 import os
 import requests
 import io
+from branca.element import Element
 
 # ==============================
 # CONFIGURACIÓN
@@ -128,8 +129,20 @@ def crear_mapa(df: pd.DataFrame):
             icon=folium.Icon(color=color, icon=icono, prefix='glyphicon'),
         ).add_to(m)
 
-    # Pequeña leyenda manual
-    folium.map.CustomIcon
+    # Leyenda simple (HTML)
+    legend_html = """
+    <div style="
+        position: fixed;
+        bottom: 30px; left: 30px;
+        z-index: 9999; background: white;
+        padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px;">
+      <b>Leyenda</b><br>
+      <span style="display:inline-block;width:10px;height:10px;background:green;margin-right:6px;"></span> $25 (dentro cuadrante)<br>
+      <span style="display:inline-block;width:10px;height:10px;background:red;margin-right:6px;"></span> $75 (fuera cuadrante)
+    </div>
+    """
+    m.get_root().html.add_child(Element(legend_html))
+
     folium.LayerControl().add_to(m)
     return m
 
@@ -213,7 +226,14 @@ def generar_pdf(df_filtrado: pd.DataFrame, fecha_inicio: datetime, fecha_fin: da
 
     for fecha_dia, df_dia in df_filtrado.groupby('__FechaD__'):
         # Título de día
-        titulo_dia = fecha_dia.strftime('%d/%m/%Y') if isinstance(fecha_dia, datetime.date) else 'Sin fecha'
+        if isinstance(fecha_dia, date):
+            titulo_dia = fecha_dia.strftime('%d/%m/%Y')
+        else:
+            try:
+                titulo_dia = pd.to_datetime(fecha_dia).strftime('%d/%m/%Y')
+            except Exception:
+                titulo_dia = 'Sin fecha'
+
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 8, f"Día: {titulo_dia}", 0, 1)
 
