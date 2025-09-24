@@ -16,7 +16,7 @@ SHEET_ID = "1pXvN1PdQKfU8N5b8G5kPY5K8uhgCEbyt5EhKQt1-5ik"
 WORKSHEET_NAME = "data"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Cuadrante geográfico (usaremos una aproximación simple sin Shapely)
+# Cuadrante geográfico (solo para visualización en el mapa)
 cuadrante_coords = [
     [18.424446, -69.988949],
     [18.471448, -69.881432],
@@ -75,7 +75,7 @@ def cargar_datos():
             if os.path.exists(SERVICE_JSON_PATH):
                 creds = Credentials.from_service_account_file(SERVICE_JSON_PATH, scopes=SCOPES)
             else:
-                st.error("❌ No se encontraron credenciales.")
+                st.error("❌ No se encontraron credenciales. Configura los secrets en Streamlit Cloud.")
                 return pd.DataFrame()
         
         client = gspread.authorize(creds)
@@ -104,20 +104,22 @@ def cargar_datos():
         return pd.DataFrame()
 
 # ==============================
-# FUNCIÓN SIMPLIFICADA PARA VERIFICAR CUADRANTE
+# FUNCIÓN SIMPLIFICADA PARA VERIFICAR CUADRANTE (sin Shapely)
 # ==============================
-def esta_en_cuadrante(lat, lon):
-    """Verifica si un punto está dentro del cuadrante (aproximación simple)"""
+def esta_en_cuadrante_simple(lat, lon):
+    """Verifica si un punto está dentro del cuadrante usando bounding box simple"""
     try:
         if pd.isna(lat) or pd.isna(lon):
             return False
         
-        # Coordenadas límite del cuadrante
-        lat_min = min(coord[0] for coord in cuadrante_coords)
-        lat_max = max(coord[0] for coord in cuadrante_coords)
-        lon_min = min(coord[1] for coord in cuadrante_coords)
-        lon_max = max(coord[1] for coord in cuadrante_coords)
+        # Obtener los límites del cuadrante
+        lats = [coord[0] for coord in cuadrante_coords]
+        lons = [coord[1] for coord in cuadrante_coords]
         
+        lat_min, lat_max = min(lats), max(lats)
+        lon_min, lon_max = min(lons), max(lons)
+        
+        # Verificación simple por bounding box (aproximación)
         return (lat_min <= lat <= lat_max) and (lon_min <= lon <= lon_max)
     except:
         return False
@@ -142,7 +144,7 @@ def crear_mapa(df_filtrado):
     
     mapa = folium.Map(location=[lat_center, lon_center], zoom_start=12)
     
-    # Agregar cuadrante
+    # Agregar cuadrante (solo visualización)
     folium.Polygon(
         locations=cuadrante_coords,
         color='blue',
@@ -159,21 +161,26 @@ def crear_mapa(df_filtrado):
         if row['Pago'] == 25:
             color = 'green'
             icono = 'ok-sign'
+            tooltip_text = "Dentro cuadrante ($25)"
         elif row['Pago'] == 75:
             color = 'red'
             icono = 'remove-sign'
+            tooltip_text = "Fuera cuadrante ($75)"
         else:
             color = 'gray'
             icono = 'question-sign'
+            tooltip_text = "IDEMEFA ($0)"
         
         # Popup con información
+        fecha_str = row['Fecha de llenar'].strftime('%d/%m/%Y %H:%M') if pd.notna(row.get('Fecha de llenar')) else 'N/A'
+        
         popup_html = f"""
         <div style="width: 250px;">
             <h4>Detalle de Entrega</h4>
             <p><b>Colaborador:</b> {row.get('Empleado', 'N/A')}</p>
             <p><b>Cliente:</b> {row.get('Nombre del cliente (usuario/codigo)', 'N/A')}</p>
             <p><b>Pago:</b> ${row.get('Pago', 0)}</p>
-            <p><b>Fecha:</b> {row.get('Fecha de llenar', 'N/A')}</p>
+            <p><b>Fecha:</b> {fecha_str}</p>
             <p><b>Dirección:</b> {str(row.get('Dirección de envío', 'N/A'))[:50]}...</p>
         </div>
         """
@@ -181,7 +188,7 @@ def crear_mapa(df_filtrado):
         folium.Marker(
             location=[row['Latitud'], row['Longitud']],
             popup=folium.Popup(popup_html, max_width=300),
-            tooltip=f"{row.get('Empleado', 'N/A')} - ${row.get('Pago', 0)}",
+            tooltip=tooltip_text,
             icon=folium.Icon(color=color, icon=icono, prefix='glyphicon')
         ).add_to(mapa)
     
@@ -337,7 +344,9 @@ def main_app():
     df = cargar_datos()
     
     if df.empty:
-        st.error("No se pudieron cargar los datos.")
+        st.error("No se pudieron cargar los datos. Verifique:")
+        st.error("1. Que el Google Sheet esté compartido correctamente")
+        st.error("2. Que las credenciales estén configuradas en Streamlit Secrets")
         return
     
     # Sidebar con filtros
@@ -381,7 +390,7 @@ def main_app():
         df_filtrado = df.copy()
     
     # Métricas principales
-    st.subheader("Resumen General")
+    st.subheader("📊 Resumen General")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -419,7 +428,7 @@ def main_app():
         'Empleado', 'Fecha de llenar', 'Dirección de envío', 
         'Lugar de envío', 'Nombre del cliente (usuario/codigo)',
         'Nombre de quien recibe (maria/secretaria, juan/asistente, miguel ruiz/doctor)',
-        'Pago', 'Latitud', 'Longitud'
+        'Pago'
     ]
     
     columnas_disponibles = [col for col in columnas_mostrar if col in df_filtrado.columns]
