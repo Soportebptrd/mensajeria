@@ -359,8 +359,6 @@ if not check_password():
     st.stop()
 
 st.title("🚚 Reporte de Mensajería – IDEMEFA")
-st.caption("Login → filtros por empleado y rango de fechas → mapa con polígono → tabla → subtotales diarios y total → PDF (solo tabla)")
-st.markdown("---")
 
 # Cargar datos
 with st.spinner("Cargando datos..."):
