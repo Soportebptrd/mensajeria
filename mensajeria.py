@@ -98,16 +98,32 @@ def cargar_datos(url: str) -> pd.DataFrame:
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
 
-        # CORRECCIÓN: Especificar formato de fecha día/mes/año
+        # MEJOR MANEJO DE FECHAS - Múltiples intentos con diferentes formatos
         if 'Fecha de llenar' in df.columns:
-            # Primero intentar con formato específico día/mes/año
-            df['Fecha de llenar'] = pd.to_datetime(
-                df['Fecha de llenar'], 
-                format='%d/%m/%Y %H:%M',  # Formato específico para 3/10/2025 17:07
-                errors='coerce'
-            )
-            # Si falla, intentar con inferencia
-            if df['Fecha de llenar'].isna().any():
+            # Intentar diferentes formatos de fecha
+            date_formats = [
+                '%d/%m/%Y %H:%M',  # 03/10/2025 17:07
+                '%m/%d/%Y %H:%M',  # 10/03/2025 17:07 (formato US)
+                '%Y-%m-%d %H:%M:%S',  # 2025-10-03 17:07:00
+                '%d/%m/%Y',  # 03/10/2025
+                '%m/%d/%Y',  # 10/03/2025
+            ]
+            
+            for date_format in date_formats:
+                try:
+                    df['Fecha de llenar'] = pd.to_datetime(
+                        df['Fecha de llenar'], 
+                        format=date_format,
+                        errors='coerce'
+                    )
+                    # Si conseguimos parsear algunas fechas, continuar
+                    if df['Fecha de llenar'].notna().any():
+                        break
+                except:
+                    continue
+            
+            # Último intento con inferencia
+            if df['Fecha de llenar'].isna().all():
                 df['Fecha de llenar'] = pd.to_datetime(df['Fecha de llenar'], errors='coerce')
                 
         if 'Pago' in df.columns:
@@ -119,6 +135,13 @@ def cargar_datos(url: str) -> pd.DataFrame:
 
         # Quitar filas completamente vacías
         df = df.dropna(how='all')
+        
+        # DEBUG: Mostrar información sobre fechas parseadas
+        if 'Fecha de llenar' in df.columns:
+            st.sidebar.info(f"Fechas parseadas: {df['Fecha de llenar'].notna().sum()}/{len(df)}")
+            if df['Fecha de llenar'].notna().any():
+                st.sidebar.info(f"Ejemplo de fecha: {df['Fecha de llenar'].iloc[0]}")
+                
         return df
     except Exception as e:
         st.error(f"❌ Error cargando datos de Google Sheets: {e}")
@@ -416,19 +439,49 @@ colab_sel = st.sidebar.selectbox("Colaborador", colaboradores)
 
 # Aplicar filtros
 if isinstance(rango, (list, tuple)) and len(rango) == 2:
-    fecha_inicio = pd.to_datetime(rango[0])
-    fecha_fin = pd.to_datetime(rango[1]) + timedelta(days=1) - timedelta(seconds=1)
+    fecha_inicio = pd.to_datetime(rango[0]).normalize()  # Comienzo del día
+    fecha_fin = pd.to_datetime(rango[1]).normalize() + timedelta(days=1) - timedelta(seconds=1)  # Fin del día
 else:
     fecha_inicio = fecha_min
     fecha_fin = fecha_max
 
+st.sidebar.write(f"🗓️ Filtro activo: {fecha_inicio.strftime('%d/%m/%Y')} a {fecha_fin.strftime('%d/%m/%Y')}")
+
 mask = pd.Series([True] * len(df))
 if 'Fecha de llenar' in df.columns:
-    mask &= (df['Fecha de llenar'] >= fecha_inicio) & (df['Fecha de llenar'] <= fecha_fin)
+    # Filtrar solo fechas válidas
+    fecha_mask = df['Fecha de llenar'].notna()
+    fecha_mask &= (df['Fecha de llenar'] >= fecha_inicio) 
+    fecha_mask &= (df['Fecha de llenar'] <= fecha_fin)
+    mask &= fecha_mask
+    
+    st.sidebar.write(f"📊 Registros con fecha válida en rango: {fecha_mask.sum()}")
+    
 if colab_sel != 'Total' and 'Empleado' in df.columns:
     mask &= (df['Empleado'] == colab_sel)
 
 df_filtrado = df.loc[mask].copy()
+
+# DIAGNÓSTICO - Agregar esto para ver qué está pasando con las fechas
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔍 Diagnóstico Filtros")
+st.sidebar.write(f"Filtro aplicado: {rango[0]} a {rango[1]}")
+st.sidebar.write(f"Fecha inicio (pd): {fecha_inicio}")
+st.sidebar.write(f"Fecha fin (pd): {fecha_fin}")
+st.sidebar.write(f"Registros después del filtro: {len(df_filtrado)}")
+
+if 'Fecha de llenar' in df_filtrado.columns and len(df_filtrado) > 0:
+    st.sidebar.write(f"Rango en datos filtrados:")
+    st.sidebar.write(f"- Mínima: {df_filtrado['Fecha de llenar'].min()}")
+    st.sidebar.write(f"- Máxima: {df_filtrado['Fecha de llenar'].max()}")
+    
+    # Mostrar algunas fechas específicas de octubre
+    october_data = df_filtrado[df_filtrado['Fecha de llenar'].dt.month == 10]
+    st.sidebar.write(f"Registros de octubre en filtro: {len(october_data)}")
+    if len(october_data) > 0:
+        st.sidebar.write("Primeras fechas de octubre:")
+        for i, fecha in enumerate(october_data['Fecha de llenar'].head(3)):
+            st.sidebar.write(f"  {i+1}. {fecha}")
 
 # ==============================
 # Métricas rápidas
