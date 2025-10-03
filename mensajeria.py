@@ -413,47 +413,6 @@ if df.empty:
     st.stop()
 
 # ==============================
-# DIAGNÓSTICO DESPUÉS DE CARGAR DATOS
-# ==============================
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔍 Diagnóstico de Datos")
-
-if df is not None and not df.empty:
-    st.sidebar.write(f"✅ Datos cargados: {len(df)} registros")
-    
-    if 'Fecha de llenar' in df.columns:
-        valid_dates = df['Fecha de llenar'].notna().sum()
-        st.sidebar.write(f"📅 Fechas válidas: {valid_dates}/{len(df)}")
-        
-        if valid_dates > 0:
-            # Información básica de fechas
-            fecha_min = df['Fecha de llenar'].min()
-            fecha_max = df['Fecha de llenar'].max()
-            st.sidebar.write(f"🗓️ Rango de fechas:")
-            st.sidebar.write(f"- Mínima: {fecha_min}")
-            st.sidebar.write(f"- Máxima: {fecha_max}")
-            
-            # Distribución por mes
-            df_valid = df[df['Fecha de llenar'].notna()].copy()
-            df_valid['Mes'] = df_valid['Fecha de llenar'].dt.month
-            df_valid['Año'] = df_valid['Fecha de llenar'].dt.year
-            
-            st.sidebar.write("**📊 Distribución por mes:**")
-            monthly_counts = df_valid.groupby(['Año', 'Mes']).size().reset_index(name='Count')
-            for _, row in monthly_counts.iterrows():
-                st.sidebar.write(f"- {row['Año']}-{row['Mes']:02d}: {row['Count']} registros")
-            
-            # Mostrar ejemplos de fechas
-            st.sidebar.write("**🔍 Ejemplos de fechas:**")
-            sample_dates = df_valid['Fecha de llenar'].head(3)
-            for i, fecha in enumerate(sample_dates):
-                st.sidebar.write(f"{i+1}. {fecha}")
-    else:
-        st.sidebar.warning("❌ No se encontró la columna 'Fecha de llenar'")
-else:
-    st.sidebar.error("❌ No se pudieron cargar los datos")
-
-# ==============================
 # FILTROS (solo si tenemos datos)
 # ==============================
 st.sidebar.header("Filtros")
