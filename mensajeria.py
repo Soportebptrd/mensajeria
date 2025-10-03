@@ -98,9 +98,18 @@ def cargar_datos(url: str) -> pd.DataFrame:
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
 
-        # Normalización de columnas conocidas
+        # CORRECCIÓN: Especificar formato de fecha día/mes/año
         if 'Fecha de llenar' in df.columns:
-            df['Fecha de llenar'] = pd.to_datetime(df['Fecha de llenar'], errors='coerce')
+            # Primero intentar con formato específico día/mes/año
+            df['Fecha de llenar'] = pd.to_datetime(
+                df['Fecha de llenar'], 
+                format='%d/%m/%Y %H:%M',  # Formato específico para 3/10/2025 17:07
+                errors='coerce'
+            )
+            # Si falla, intentar con inferencia
+            if df['Fecha de llenar'].isna().any():
+                df['Fecha de llenar'] = pd.to_datetime(df['Fecha de llenar'], errors='coerce')
+                
         if 'Pago' in df.columns:
             df['Pago'] = pd.to_numeric(df['Pago'], errors='coerce')
         if 'Latitud' in df.columns:
@@ -367,22 +376,36 @@ with st.spinner("Cargando datos..."):
 if df.empty:
     st.stop()
 
+# DEBUG: Mostrar información sobre las fechas cargadas
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔍 Debug Info")
+if 'Fecha de llenar' in df.columns:
+    st.sidebar.write(f"Rango de fechas en datos:")
+    st.sidebar.write(f"- Mínima: {df['Fecha de llenar'].min()}")
+    st.sidebar.write(f"- Máxima: {df['Fecha de llenar'].max()}")
+    st.sidebar.write(f"- Total registros: {len(df)}")
+    st.sidebar.write(f"- Registros con fecha válida: {df['Fecha de llenar'].notna().sum()}")
+
 # Sidebar – filtros
 st.sidebar.header("Filtros")
 
-# Rango de fechas
+# Rango de fechas - CORRECCIÓN: Manejar mejor las fechas
 if 'Fecha de llenar' in df.columns and df['Fecha de llenar'].notna().any():
-    fecha_min = pd.to_datetime(df['Fecha de llenar'].min())
-    fecha_max = pd.to_datetime(df['Fecha de llenar'].max())
+    fecha_min = df['Fecha de llenar'].min().to_pydatetime()
+    fecha_max = df['Fecha de llenar'].max().to_pydatetime()
 else:
     fecha_min = datetime.now() - timedelta(days=30)
     fecha_max = datetime.now()
 
+# Asegurarse de que las fechas sean objetos date para st.date_input
+fecha_min_date = fecha_min.date() if hasattr(fecha_min, 'date') else fecha_min
+fecha_max_date = fecha_max.date() if hasattr(fecha_max, 'date') else fecha_max
+
 rango = st.sidebar.date_input(
     "Rango de fechas",
-    value=(fecha_min.date(), fecha_max.date()),
-    min_value=min(fecha_min.date(), fecha_max.date()),
-    max_value=max(fecha_min.date(), fecha_max.date()),
+    value=(fecha_min_date, fecha_max_date),
+    min_value=fecha_min_date,
+    max_value=fecha_max_date,
 )
 
 # Colaborador
