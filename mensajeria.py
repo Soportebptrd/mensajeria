@@ -98,33 +98,67 @@ def cargar_datos(url: str) -> pd.DataFrame:
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
 
-        # MEJOR MANEJO DE FECHAS - Múltiples intentos con diferentes formatos
+        # MEJOR MANEJO DE FECHAS - Manejar múltiples formatos
         if 'Fecha de llenar' in df.columns:
-            # Intentar diferentes formatos de fecha
-            date_formats = [
-                '%d/%m/%Y %H:%M',  # 03/10/2025 17:07
-                '%m/%d/%Y %H:%M',  # 10/03/2025 17:07 (formato US)
-                '%Y-%m-%d %H:%M:%S',  # 2025-10-03 17:07:00
-                '%d/%m/%Y',  # 03/10/2025
-                '%m/%d/%Y',  # 10/03/2025
-            ]
+            # Guardar una copia original para debug
+            df['Fecha_original'] = df['Fecha de llenar'].copy()
             
-            for date_format in date_formats:
-                try:
-                    df['Fecha de llenar'] = pd.to_datetime(
-                        df['Fecha de llenar'], 
-                        format=date_format,
-                        errors='coerce'
-                    )
-                    # Si conseguimos parsear algunas fechas, continuar
-                    if df['Fecha de llenar'].notna().any():
-                        break
-                except:
-                    continue
+            # Primero: limpiar y estandarizar formatos
+            # Reemplazar múltiples espacios y normalizar
+            df['Fecha de llenar'] = df['Fecha de llenar'].astype(str).str.strip()
             
-            # Último intento con inferencia
-            if df['Fecha de llenar'].isna().all():
-                df['Fecha de llenar'] = pd.to_datetime(df['Fecha de llenar'], errors='coerce')
+            # Intentar parsing flexible con dayfirst=True para formato día/mes/año
+            df['Fecha de llenar'] = pd.to_datetime(
+                df['Fecha de llenar'], 
+                dayfirst=True,  # Importante: interpretar 24/07/2025 como día 24, mes 7
+                errors='coerce'
+            )
+            
+            # Si todavía hay NaT, intentar formato específico
+            if df['Fecha de llenar'].isna().any():
+                # Para registros problemáticos, intentar formato específico
+                mask_na = df['Fecha de llenar'].isna()
+                problematic_dates = df.loc[mask_na, 'Fecha_original']
+                
+                # Intentar diferentes formatos
+                formats = [
+                    '%d/%m/%Y %H:%M:%S',  # 24/07/2025 10:36:26
+                    '%d/%m/%Y %H:%M',     # 03/10/2025 17:07
+                    '%m/%d/%Y %H:%M:%S',  # 07/24/2025 10:36:26 (US)
+                    '%m/%d/%Y %H:%M',     # 10/03/2025 17:07 (US)
+                    '%Y-%m-%d %H:%M:%S',  # 2025-07-24 10:36:26
+                    '%Y-%m-%d %H:%M',     # 2025-10-03 17:07
+                ]
+                
+                for fmt in formats:
+                    if mask_na.any():
+                        try:
+                            parsed = pd.to_datetime(
+                                df.loc[mask_na, 'Fecha_original'], 
+                                format=fmt, 
+                                errors='coerce'
+                            )
+                            # Actualizar solo los que se parsean correctamente
+                            update_mask = mask_na & parsed.notna()
+                            df.loc[update_mask, 'Fecha de llenar'] = parsed[update_mask]
+                            mask_na = df['Fecha de llenar'].isna()
+                        except:
+                            continue
+            
+            # DEBUG información
+            valid_dates = df['Fecha de llenar'].notna().sum()
+            st.sidebar.success(f"✅ Fechas válidas: {valid_dates}/{len(df)}")
+            
+            if valid_dates > 0:
+                sample_valid = df[df['Fecha de llenar'].notna()]['Fecha de llenar'].iloc[0]
+                st.sidebar.info(f"📅 Ejemplo fecha válida: {sample_valid}")
+                
+            # Mostrar problemas de parsing
+            if df['Fecha de llenar'].isna().any():
+                invalid_count = df['Fecha de llenar'].isna().sum()
+                st.sidebar.warning(f"⚠️ Fechas inválidas: {invalid_count}")
+                sample_invalid = df[df['Fecha de llenar'].isna()]['Fecha_original'].head(3).tolist()
+                st.sidebar.write(f"Ejemplos inválidos: {sample_invalid}")
                 
         if 'Pago' in df.columns:
             df['Pago'] = pd.to_numeric(df['Pago'], errors='coerce')
@@ -135,19 +169,33 @@ def cargar_datos(url: str) -> pd.DataFrame:
 
         # Quitar filas completamente vacías
         df = df.dropna(how='all')
-        
-        # DEBUG: Mostrar información sobre fechas parseadas
-        if 'Fecha de llenar' in df.columns:
-            st.sidebar.info(f"Fechas parseadas: {df['Fecha de llenar'].notna().sum()}/{len(df)}")
-            if df['Fecha de llenar'].notna().any():
-                st.sidebar.info(f"Ejemplo de fecha: {df['Fecha de llenar'].iloc[0]}")
-                
         return df
     except Exception as e:
         st.error(f"❌ Error cargando datos de Google Sheets: {e}")
         st.info("Verifica que la hoja esté publicada en Archivo → Compartir → Publicar en la web → Hoja 'data' en formato CSV")
         return pd.DataFrame()
 
+# Después de cargar los datos, agregar este diagnóstico extendido
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔍 Análisis de Fechas")
+
+if 'Fecha de llenar' in df.columns:
+    # Distribución por mes
+    df_valid = df[df['Fecha de llenar'].notna()].copy()
+    if not df_valid.empty:
+        df_valid['Mes'] = df_valid['Fecha de llenar'].dt.month
+        df_valid['Año'] = df_valid['Fecha de llenar'].dt.year
+        
+        st.sidebar.write("**Distribución por mes:**")
+        monthly_counts = df_valid.groupby(['Año', 'Mes']).size().reset_index(name='Count')
+        for _, row in monthly_counts.iterrows():
+            st.sidebar.write(f"- {row['Año']}-{row['Mes']:02d}: {row['Count']} registros")
+        
+        # Mostrar ejemplos de cada mes
+        st.sidebar.write("**Ejemplos por mes:**")
+        for month in sorted(df_valid['Mes'].unique()):
+            sample = df_valid[df_valid['Mes'] == month]['Fecha de llenar'].iloc[0]
+            st.sidebar.write(f"- Mes {month}: {sample}")
 
 def _bounds_from_coords(coords: list[list[float]]):
     """Devuelve (sw, ne) bounds a partir de una lista de [lat, lon]."""
