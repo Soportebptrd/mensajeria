@@ -59,7 +59,33 @@ COLUMNAS_TABLA = [
     'Pago',
 ]
 
+# ==============================
+# AUTENTICACIÓN SIMPLE
+# ==============================
+def check_password() -> bool:
+    """Login básico en sidebar: idemefa / idemefa"""
+    def _password_entered():
+        user_ok = st.session_state.get("username", "") == "idemefa"
+        pass_ok = st.session_state.get("password", "") == "idemefa"
+        st.session_state["password_correct"] = bool(user_ok and pass_ok)
+        # por seguridad, no guardamos credenciales en estado si es correcto
+        if st.session_state["password_correct"]:
+            del st.session_state["username"]
+            del st.session_state["password"]
 
+    if "password_correct" not in st.session_state:
+        st.sidebar.text_input("Usuario", key="username")
+        st.sidebar.text_input("Contraseña", type="password", key="password")
+        st.sidebar.button("Ingresar", on_click=_password_entered, type="primary")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.sidebar.text_input("Usuario", key="username")
+        st.sidebar.text_input("Contraseña", type="password", key="password")
+        st.sidebar.button("Ingresar", on_click=_password_entered, type="primary")
+        st.sidebar.error("😕 Usuario o contraseña incorrectos")
+        return False
+    else:
+        return True
 
 # ==============================
 # UTILIDADES
